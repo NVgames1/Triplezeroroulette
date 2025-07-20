@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Triple Zero Roulette</title>
+<style>
+  body { background: #0b0b0b; color: #fff; font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 0; }
+  h1 { margin: 15px 0; color: #f5c542; }
+  #game { display: flex; flex-direction: column; align-items: center; }
+  #canvasContainer { position: relative; width: 600px; height: 600px; }
+  canvas { position: absolute; left: 0; top: 0; }
+  #controls { margin: 10px; }
+  .chip { display: inline-block; margin: 5px; padding: 12px 20px; background: #f5c542; border-radius: 50%; font-weight: bold; cursor: pointer; user-select: none; }
+  .chip.selected { border: 3px solid white; }
+  #balance, #result, #history { margin-top: 10px; font-size: 18px; }
+  #history { color: #f5c542; }
+  #betting-board { display: grid; grid-template-columns: 70px repeat(12,50px); grid-template-rows: repeat(3,50px) 50px 50px; gap: 2px; margin-top: 20px; user-select: none; background: #0b0b0b; padding: 10px; border-radius: 8px; }
+  .bet-cell { display: flex; align-items: center; justify-content: center; font-weight: bold; cursor: pointer; position: relative; border-radius: 4px; color: white; background: #333; font-size: 14px; border: 1px solid #666; }
+  .green { background: green; }
+  .red { background: #e60000; }
+  .black { background: #101010; }
+  .outside-bet { background: #444; font-size: 12px; }
+  .red-symbol, .black-symbol { width: 20px; height: 20px; margin: auto; clip-path: polygon(50% 0%,100% 50%,50% 100%,0% 50%);}  
+  .red-symbol { background: #e60000; } .black-symbol { background: #101010; }
+  .cell-chip { position: absolute; bottom:2px; right:2px; background:#f5c542; color:black; border-radius:50%; padding:2px 5px; font-size:12px; font-weight:bold; }
+  button { background:#f5c542; color:black; font-size:18px; padding:10px 20px; margin:5px; cursor:pointer; border:none; border-radius:5px; }
+</style>
+</head>
+<body>
+<h1>Triple Zero Roulette</h1>
+<div id="game">
+  <div id="canvasContainer">
+    <canvas id="wheelCanvas" width="600" height="600"></canvas>
+    <canvas id="ballCanvas" width="600" height="600"></canvas>
+  </div>
+  <div id="controls">
+    <div>
+      <span class="chip" data-value="1">1</span>
+      <span class="chip" data-value="5">5</span>
+      <span class="chip" data-value="10">10</span>
+      <span class="chip" data-value="50">50</span>
+    </div>
+    <button id="spinBtn">Spin</button>
+    <button id="clearBetsBtn">Clear Bets</button>
+    <div id="balance">Balance: <span id="balance-value">1000</span></div>
+    <div id="result">Place your bets</div>
+    <div id="history">History: -</div>
+  </div>
+  <div id="betting-board"></div>
+</div>
+<script>
+// Canvas setup
+const wheelCanvas = document.getElementById('wheelCanvas');
+const ballCanvas = document.getElementById('ballCanvas');
+const wctx = wheelCanvas.getContext('2d');
+const bctx = ballCanvas.getContext('2d');
+
+// Controls
+const spinBtn = document.getElementById('spinBtn');
+const clearBetsBtn = document.getElementById('clearBetsBtn');
+const balanceElem = document.getElementById('balance-value');
+const resultElem = document.getElementById('result');
+const historyElem = document.getElementById('history');
+const bettingBoard = document.getElementById('betting-board');
+const chips = document.querySelectorAll('.chip');
+
+// Game state
+let balance = 1000,
+    currentChip = 1,
+    bets = {},
+    spinning = false,
+    wheelAngle = 0,
+    ballAngle = 0,
+    spinStart = null,
+    winningNumber = null;
+const spinDuration = 4000; // 4 seconds
+let lastResults = [];
+
+// Numbers and colors
+const numbers = ["0","000","00","32","15","19","4","21","2","25","17","34","6","27",
+                 "13","36","11","30","8","23","10","5","24","16","33","1","20","14",
+                 "31","9","22","18","29","7","28","12","35","3","26"];
+const colors = {};
+numbers.forEach(n => colors[n] = ["0","00","000"].includes(n) ? 'green' : 'black');
+[32,19,21,25,34,27,36,30,23,5,16,1,14,9,18,7,12,3].forEach(n => colors[n.toString()] = 'red');
+
+// Chip selection
+chips.forEach(c => c.addEventListener('click', () => {
+  chips.forEach(x => x.classList.remove('selected'));
+  c.classList.add('selected');
+  currentChip = +c.dataset.value;
+}));
+chips[0].classList.add('selected');
+
+// Draw the wheel with sectors and separators
+function drawWheel() {
+  const R = wheelCanvas.width/2 - 40;
+  const r = R * 0.65;
+  const arc = 2 * Math.PI / numbers.length;
+
+  wctx.clearRect(0, 0, 600, 600);
+  wctx.save();
+  wctx.translate(300, 300);
+  wctx.rotate(wheelAngle);
+
+  numbers.forEach((num, i) => {
+    const a = i * arc;
+    // Sector fill
+    wctx.beginPath();
+    wctx.arc(0, 0, R, a, a + arc);
+    wctx.arc(0, 0, r, a + arc, a, true);
+    wctx.closePath();
+    wctx.fillStyle = colors[num] === 'red' ? '#e60000'
+                   : colors[num] === 'black' ? '#0d0d0d' : 'green';
+    wctx.fill();
+    // Sector border
+    wctx.strokeStyle = '#c0c0c0';
+    wctx.beginPath();
+    wctx.moveTo(r * Math.cos(a), r * Math.sin(a));
+    wctx.lineTo(R * Math.cos(a), R * Math.sin(a));
+    wctx.stroke();
+    // Number label
+    wctx.save();
+    wctx.rotate(a + arc/2);
+    wctx.translate(R * 0.87, 0);
+    wctx.rotate(Math.PI/2);
+    wctx.fillStyle = 'white';
+    wctx.font = 'bold 12px Arial';
+    wctx.fillText(num, -wctx.measureText(num).width/2, 0);
+    wctx.restore();
+  });
+
+  // Silver separator inner
+  wctx.beginPath();
+  wctx.arc(0, 0, r, 0, 2 * Math.PI);
+  wctx.lineWidth = 2;
+  wctx.strokeStyle = '#c0c0c0';
+  wctx.stroke();
+
+  // Ball track outer
+  const track = (R + r) / 2;
+  wctx.beginPath();
+  wctx.arc(0, 0, track, 0, 2 * Math.PI);
+  wctx.lineWidth = 4;
+  wctx.strokeStyle = '#c0c0c0';
+  wctx.stroke();
+
+  // Outer metallic ring
+  const grad = wctx.createLinearGradient(-R, -R, R, R);
+  grad.addColorStop(0, '#f5deb3');
+  grad.addColorStop(1, '#8b4513');
+  wctx.beginPath();
+  wctx.arc(0, 0, R + 10, 0, 2 * Math.PI);
+  wctx.lineWidth = 20;
+  wctx.strokeStyle = grad;
+  wctx.stroke();
+
+  // Wooden center
+  wctx.beginPath();
+  wctx.arc(0, 0, r * 0.6, 0, 2 * Math.PI);
+  const wood = wctx.createLinearGradient(-20, -20, 20, 20);
+  wood.addColorStop(0, '#deb887');
+  wood.addColorStop(1, '#8b5a2b');
+  wctx.fillStyle = wood;
+  wctx.fill();
+  wctx.fillStyle = '#333';
+  for (let i = 0; i < 4; i++) {
+    wctx.rotate(Math.PI/2);
+    wctx.fillRect(r * 0.15, -5, 25, 10);
+  }
+
+  wctx.restore();
+}
+
+// Draw the ball at an interpolated track position
+function drawBall(prog = 1) {
+  const R = wheelCanvas.width/2 - 40;
+  const r = R * 0.65;
+  const start = (R + r) / 2 - 5;
+  const end = r + 5;
+  const track = start + (end - start) * prog;
+
+  bctx.clearRect(0, 0, 600, 600);
+  bctx.save();
+  bctx.translate(300, 300);
+  bctx.rotate(ballAngle);
+  const grad = bctx.createRadialGradient(track - 4, -4, 1, track, 0, 8);
+  grad.addColorStop(0, '#fff');
+  grad.addColorStop(1, '#ccc');
+  bctx.fillStyle = grad;
+  bctx.beginPath();
+  bctx.arc(track, 0, 8, 0, 2 * Math.PI);
+  bctx.fill();
+  bctx.restore();
+}
+
+// Spin animation
+function animate(ts) {
+  if (!spinStart) spinStart = ts;
+  const t = (ts - spinStart) / spinDuration;
+  const prog = Math.min(t, 1);
+  // Slowdown curves
+  wheelAngle += 0.005 * (1 - prog);
+  ballAngle  -= 0.224 * (1 - prog);
+  drawWheel();
+  drawBall(prog);
+  if (prog < 1) requestAnimationFrame(animate);
+  else finishSpin();
+}
+
+// Finalize spin
+function finishSpin() {
+  spinning = false;
+  const arc = 2 * Math.PI / numbers.length;
+  let rel = (ballAngle - wheelAngle) % (2 * Math.PI);
+  if (rel < 0) rel += 2 * Math.PI;
+  const idx = Math.floor(rel / arc) % numbers.length;
+  winningNumber = numbers[idx];
+  ballAngle = wheelAngle + idx * arc + arc/2;
+  lastResults.unshift(winningNumber);
+  if (lastResults.length > 5) lastResults.pop();
+  historyElem.textContent = `History: ${lastResults.join(' | ')}`;
+  resultElem.innerHTML = `Result: <b>${winningNumber}</b>`;
+  payOut();
+  drawBall(1);
+}
+
+// Betting logic
+function payOut() {
+  let win = 0;
+  if (bets[winningNumber]) win += bets[winningNumber] * 35;
+  const num = +winningNumber;
+  if (num) {
+    const dozen = num <= 12 ? '1st 12' : num <= 24 ? '2nd 12' : '3rd 12';
+    if (bets[dozen]) win += bets[dozen] * 2;
+    if (num <= 18 && bets['1 to 18']) win += bets['1 to 18'];
+    if (num % 2 === 0 && bets['EVEN']) win += bets['EVEN'];
+    if (colors[winningNumber] === 'red' && bets['RED']) win += bets['RED'];
+    if (colors[winningNumber] === 'black' && bets['BLACK']) win += bets['BLACK'];
+    if (num % 2 === 1 && bets['ODD']) win += bets['ODD'];
+    if (num >= 19 && bets['19 to 36']) win += bets['19 to 36'];
+  }
+  balance += win;
+  balanceElem.textContent = balance;
+  bets = {};
+}
+
+function placeBet(val, cell) {
+  if (spinning || balance < currentChip) return;
+  balance -= currentChip;
+  balanceElem.textContent = balance;
+  bets[val] = (bets[val] || 0) + currentChip;
+  let d = cell.querySelector('.cell-chip');
+  if (!d) {
+    d = document.createElement('div');
+    d.className = 'cell-chip';
+    cell.appendChild(d);
+  }
+  d.textContent = bets[val];
+}
+
+function clearBets() {
+  bets = {};
+  bettingBoard.querySelectorAll('.cell-chip').forEach(n => n.remove());
+}
+
+function createCell(val, cls, color) {
+  const c = document.createElement('div');
+  c.className = 'bet-cell ' + cls + (color ? ' ' + color : '');
+  if (!(cls === 'outside-bet' && (val === 'RED' || val === 'BLACK'))) c.textContent = val;
+  return c;
+}
+
+function createBoard() {
+  bettingBoard.innerHTML = '';
+  ['000','00','0'].forEach(v => {
+    const cell = createCell(v, 'green');
+    cell.addEventListener('click', () => placeBet(v, cell));
+    bettingBoard.appendChild(cell);
+  });
+  const rows = [[], [], []];
+  for (let i = 1; i <= 36; i++) rows[(i - 1) % 3].push(i);
+  rows.reverse().forEach(row => row.forEach(n => {
+    const cell = createCell(n.toString(), '', colors[n.toString()]);
+    cell.addEventListener('click', () => placeBet(n.toString(), cell));
+    bettingBoard.appendChild(cell);
+  }));
+  ['1st 12','2nd 12','3rd 12'].forEach(txt => {
+    const cell = createCell(txt, 'outside-bet');
+    cell.addEventListener('click', () => placeBet(txt, cell));
+    bettingBoard.appendChild(cell);
+  });
+  ['1 to 18','EVEN','RED','BLACK','ODD','19 to 36'].forEach(txt => {
+    const cell = createCell(txt, 'outside-bet');
+    if (txt === 'RED') cell.innerHTML = "<div class='red-symbol'></div>";
+    if (txt === 'BLACK') cell.innerHTML = "<div class='black-symbol'></div>";
+    cell.addEventListener('click', () => placeBet(txt, cell));
+    bettingBoard.appendChild(cell);
+  });
+}
+
+// Initialize
+createBoard();
+drawWheel();
+drawBall(0);
+spinBtn.addEventListener('click', () => {
+  if (!Object.keys(bets).length) return alert('Place your bets first!');
+  spinning = true;
+  spinStart = null;
+  requestAnimationFrame(animate);
+  clearBets();
+});
+clearBetsBtn.addEventListener('click', clearBets);
+</script>
+</body>
+</html>
